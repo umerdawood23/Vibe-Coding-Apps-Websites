@@ -1,0 +1,5 @@
+{
+  "name": "Script-to-Image Prompt Generator",
+  "description": "An AI-powered studio that takes a script or topic and generates detailed, styled prompts for image generation models. Users can provide a script, define an image style with a reference image and keywords, and choose an aspect ratio to create customized prompts.",
+  "requestFramePermissions": []
+}
