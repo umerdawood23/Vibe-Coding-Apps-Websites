@@ -1,7 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { FormData, AspectRatio } from '../types';
 
-const buildPrompt = (formData: FormData): string => {
+export const buildPrompt = (formData: FormData): string => {
   const { script, numScenes, niche, styleKeywords, aspectRatio, referenceImage } = formData;
   
   const baseInstruction = referenceImage

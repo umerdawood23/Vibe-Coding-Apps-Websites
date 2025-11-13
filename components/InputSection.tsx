@@ -2,7 +2,6 @@ import React from 'react';
 
 interface InputSectionProps {
   number: number;
-  // FIX: Changed title from string to React.ReactNode to allow icons in the title.
   title: React.ReactNode;
   children: React.ReactNode;
 }
