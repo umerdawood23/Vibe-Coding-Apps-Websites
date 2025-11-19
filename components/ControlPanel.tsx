@@ -1,8 +1,9 @@
+
 import React from 'react';
-import { FormData, AspectRatio, ScriptStats, AppStatus, GenerationSettings } from '../types';
+import { FormData, AspectRatio, ScriptStats, AppStatus, GenerationSettings, VisualStyle } from '../types';
 import { InputSection } from './InputSection';
 import { ImageUploader } from './ImageUploader';
-import { UploadIcon, HashIcon, TagIcon, ImageIcon, SparklesIcon, AspectRatioIcon, SettingsIcon } from './Icons';
+import { UploadIcon, TagIcon, ImageIcon, SparklesIcon, CameraIcon } from './Icons';
 
 interface ControlPanelProps {
   formData: FormData;
@@ -17,6 +18,7 @@ interface ControlPanelProps {
 }
 
 const aspectRatios: AspectRatio[] = ['16:9', '9:16', '4:3', '3:4', '1:1'];
+const visualStyles: VisualStyle[] = ['cinematic', 'realistic', 'anime', 'cgi', 'medieval', 'historical', 'documentary', 'cyberpunk'];
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({ 
     formData, 
@@ -44,25 +46,21 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
   const getButtonText = () => {
     switch(appStatus) {
-      case 'generatingPrompts': return 'Generating Prompts...';
-      case 'generatingImages': return 'Processing Images...';
+      case 'generatingPrompts': return 'Planning Script & Scenes...';
+      case 'generatingImages': return 'Generating Images...';
       case 'completed': return 'Finished';
-      default: return 'Generate';
+      default: return 'Generate Script Plan';
     }
   }
     
   return (
     <div className="bg-slate-800/50 p-6 rounded-lg border border-slate-700 flex flex-col gap-6">
-      <InputSection number={1} title="Provide Content">
-        <div className="flex border-b border-slate-600 mb-4">
-          <button className="py-2 px-4 text-sm font-medium text-white border-b-2 border-blue-500">From Script</button>
-          <button className="py-2 px-4 text-sm font-medium text-slate-400 hover:text-white">From Prompts</button>
-        </div>
+      <InputSection number={1} title="Input Content">
         <div className="relative">
           <textarea
             value={formData.script}
             onChange={(e) => onFormChange('script', e.target.value)}
-            placeholder="Paste your script here, or upload a file. The AI will create a prompt for each paragraph or logical scene."
+            placeholder="Paste your script, topic, or idea here. The AI will structure it and create prompts."
             className="w-full h-40 bg-slate-900 border border-slate-600 rounded-md p-3 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none resize-y"
           />
           <div className="absolute bottom-2 right-2 flex gap-3 text-xs text-slate-400">
@@ -72,22 +70,45 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         </div>
         <label htmlFor="script-upload" className="mt-4 w-full bg-slate-700 hover:bg-slate-600 text-white font-medium py-2.5 px-4 rounded-md flex items-center justify-center gap-2 cursor-pointer transition-colors">
           <UploadIcon />
-          Upload Script File (.txt)
+          Upload Text File (.txt)
         </label>
         <input id="script-upload" type="file" accept=".txt" className="hidden" onChange={handleFileChange} />
-        <div className="mt-4">
-            <label className="text-sm font-medium text-slate-300 flex items-center gap-2 mb-2"><TagIcon /> Niche / Topic (Optional)</label>
-            <input
-              type="text"
-              value={formData.niche}
-              onChange={(e) => onFormChange('niche', e.target.value)}
-              placeholder="e.g., futuristic gadgets"
-              className="w-full bg-slate-900 border border-slate-600 rounded-md p-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
-            />
-          </div>
+        
+        <div className="mt-4 grid grid-cols-2 gap-3">
+             <div>
+                <label className="text-sm font-medium text-slate-300 block mb-2">Target Scenes</label>
+                <div className="flex gap-2">
+                    <input
+                    type="number"
+                    value={formData.numScenes}
+                    onChange={(e) => onFormChange('numScenes', e.target.value)}
+                    placeholder="Auto"
+                    className="w-full bg-slate-900 border border-slate-600 rounded-md p-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    />
+                     <button 
+                        onClick={onSuggestScenes}
+                        disabled={isSuggestingScenes || !formData.script}
+                        className="px-3 bg-slate-700 hover:bg-slate-600 text-white rounded-md disabled:opacity-50 text-xs"
+                        title="AI Suggest Count"
+                    >
+                        {isSuggestingScenes ? '...' : '?'}
+                    </button>
+                </div>
+             </div>
+             <div>
+                <label className="text-sm font-medium text-slate-300 block mb-2">Niche / Topic</label>
+                <input
+                type="text"
+                value={formData.niche}
+                onChange={(e) => onFormChange('niche', e.target.value)}
+                placeholder="e.g. History"
+                className="w-full bg-slate-900 border border-slate-600 rounded-md p-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+             </div>
+        </div>
       </InputSection>
 
-      <InputSection number={2} title="Define Image Style">
+      <InputSection number={2} title="Visual Style">
         <div>
           <label className="text-sm font-medium text-slate-300 flex items-center gap-2 mb-2"><ImageIcon /> Reference Image (Optional)</label>
           <ImageUploader
@@ -95,13 +116,29 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             setReferenceImage={(value) => onFormChange('referenceImage', value)}
           />
         </div>
+        
         <div className="mt-4">
-            <label className="text-sm font-medium text-slate-300 flex items-center gap-2 mb-2"><SparklesIcon /> Style Keywords</label>
+            <label className="text-sm font-medium text-slate-300 flex items-center gap-2 mb-2"><CameraIcon /> Global Style</label>
+            <div className="grid grid-cols-1 gap-3">
+                <select 
+                    value={formData.visualStyle}
+                    onChange={(e) => onFormChange('visualStyle', e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-600 rounded-md p-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none text-white capitalize"
+                >
+                    {visualStyles.map(style => (
+                        <option key={style} value={style}>{style}</option>
+                    ))}
+                </select>
+            </div>
+        </div>
+
+        <div className="mt-4">
+            <label className="text-sm font-medium text-slate-300 flex items-center gap-2 mb-2"><SparklesIcon /> Extra Keywords</label>
              <input
               type="text"
               value={formData.styleKeywords}
               onChange={(e) => onFormChange('styleKeywords', e.target.value)}
-              placeholder="e.g. cinematic, photorealistic, 4k"
+              placeholder="e.g. dark mood, golden hour, 8k"
               className="w-full bg-slate-900 border border-slate-600 rounded-md p-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
             />
         </div>
@@ -123,6 +160,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
       <InputSection number={4} title="Generation Settings">
           <div className="space-y-4">
+            <div className="flex items-center justify-between">
+                <label htmlFor="auto-download" className="text-sm font-medium text-slate-300">Auto-download images</label>
+                <button role="switch" aria-checked={settings.autoDownload} onClick={() => onSettingsChange('autoDownload', !settings.autoDownload)} className={`${settings.autoDownload ? 'bg-blue-600' : 'bg-slate-600'} relative inline-flex h-6 w-11 items-center rounded-full`}>
+                    <span className={`${settings.autoDownload ? 'translate-x-6' : 'translate-x-1'} inline-block h-4 w-4 transform rounded-full bg-white transition-transform`} />
+                </button>
+             </div>
+             
             <div>
               <label className="text-sm font-medium text-slate-300 block mb-2">Wait Time Mode</label>
               <div className="flex gap-2">
@@ -152,26 +196,16 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                     <label className="text-sm font-medium text-slate-300 block mb-2">Runs per prompt</label>
                     <input type="number" min="1" value={settings.runsPerPrompt} onChange={e => onSettingsChange('runsPerPrompt', e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded-md p-2.5 text-sm" />
                 </div>
-                <div>
-                    <label className="text-sm font-medium text-slate-300 block mb-2">Start from prompt</label>
-                    <input type="number" min="1" value={settings.startFromPrompt} onChange={e => onSettingsChange('startFromPrompt', e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded-md p-2.5 text-sm" />
-                </div>
-             </div>
-             <div className="flex items-center justify-between">
-                <label htmlFor="auto-download" className="text-sm font-medium text-slate-300">Auto-download images</label>
-                <button role="switch" aria-checked={settings.autoDownload} onClick={() => onSettingsChange('autoDownload', !settings.autoDownload)} className={`${settings.autoDownload ? 'bg-blue-600' : 'bg-slate-600'} relative inline-flex h-6 w-11 items-center rounded-full`}>
-                    <span className={`${settings.autoDownload ? 'translate-x-6' : 'translate-x-1'} inline-block h-4 w-4 transform rounded-full bg-white transition-transform`} />
-                </button>
              </div>
           </div>
       </InputSection>
 
       <button 
         onClick={onGenerate}
-        disabled={appStatus !== 'idle' || !formData.script.trim()}
+        disabled={appStatus === 'generatingPrompts' || appStatus === 'generatingImages' || !formData.script.trim()}
         className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg flex items-center justify-center gap-2 transition-all duration-300 text-lg"
       >
-        {appStatus !== 'idle' && (
+        {appStatus !== 'idle' && appStatus !== 'completed' && appStatus !== 'error' && (
             <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>

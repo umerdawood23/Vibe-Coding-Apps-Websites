@@ -1,9 +1,10 @@
+
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { ControlPanel } from './components/ControlPanel';
 import { OutputPanel } from './components/OutputPanel';
 import { Header } from './components/Header';
-import { generatePromptsFromScript, generateImageFromPrompt, suggestSceneCount, buildPrompt } from './services/geminiService';
-import { FormData, AspectRatio, AppStatus, ImageGenerationJob, GenerationSettings } from './types';
+import { generatePromptsFromScript, generateImageFromPrompt, suggestSceneCount } from './services/geminiService';
+import { FormData, AppStatus, ImageGenerationJob, GenerationSettings, ScriptData } from './types';
 
 const defaultSettings: GenerationSettings = {
   waitTimeMode: 'fixed',
@@ -22,6 +23,7 @@ function App() {
     niche: '',
     referenceImage: null,
     styleKeywords: '',
+    visualStyle: 'cinematic',
     aspectRatio: '16:9',
   });
   const [generationSettings, setGenerationSettings] = useState<GenerationSettings>(defaultSettings);
@@ -30,8 +32,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [isSuggestingScenes, setIsSuggestingScenes] = useState<boolean>(false);
   
-  const [aiRequestPrompt, setAiRequestPrompt] = useState('');
-  const [prompts, setPrompts] = useState<string[]>([]);
+  const [scriptData, setScriptData] = useState<ScriptData | null>(null);
   const [imageJobs, setImageJobs] = useState<ImageGenerationJob[]>([]);
   const [currentJobIndex, setCurrentJobIndex] = useState(0);
 
@@ -43,48 +44,56 @@ function App() {
     setGenerationSettings(prev => ({ ...prev, [field]: value }));
   }, []);
 
-  const handleGenerate = useCallback(async () => {
+  const handleGenerateScriptPlan = useCallback(async () => {
     setAppStatus('generatingPrompts');
     setError(null);
-    setPrompts([]);
+    setScriptData(null);
     setImageJobs([]);
     setCurrentJobIndex(0);
     
-    const requestPrompt = buildPrompt(formData);
-    setAiRequestPrompt(requestPrompt);
-
     try {
       const result = await generatePromptsFromScript(formData);
-      const generatedPrompts = result.trim().split('\n').filter(line => line.trim().match(/^\d+\./));
-      setPrompts(generatedPrompts);
-
-      if (generatedPrompts.length > 0) {
-        const startPromptNum = Math.max(1, generationSettings.startFromPrompt);
-        const runs = Math.max(1, generationSettings.runsPerPrompt);
-        const jobs: ImageGenerationJob[] = [];
-        
-        for (let i = startPromptNum - 1; i < generatedPrompts.length; i++) {
-          for (let j = 0; j < runs; j++) {
-            jobs.push({
-              prompt: generatedPrompts[i],
-              status: 'pending',
-              id: `${i}-${j}`
-            });
-          }
-        }
-        setImageJobs(jobs);
-        setCurrentJobIndex(0);
-        setAppStatus('generatingImages');
-      } else {
-        throw new Error("No prompts were generated from the script.");
-      }
+      setScriptData(result);
+      setAppStatus('idle'); // Go back to idle so user can review before generating images
     } catch (e) {
       const err = e as Error;
       setError(err.message || 'An unknown error occurred.');
       setAppStatus('error');
       console.error(e);
     }
-  }, [formData, generationSettings]);
+  }, [formData]);
+
+  const handleGenerateImages = useCallback(() => {
+    if (!scriptData) return;
+
+    const jobs: ImageGenerationJob[] = [];
+    const { scenes } = scriptData;
+    const runs = Math.max(1, generationSettings.runsPerPrompt);
+
+    scenes.forEach(scene => {
+        if (scene.generate_image) {
+            for (let i = 0; i < runs; i++) {
+                jobs.push({
+                    sceneId: scene.id,
+                    prompt: scene.visual_prompt,
+                    status: 'pending',
+                    id: `${scene.id}-${i}`
+                });
+            }
+        }
+    });
+
+    if (jobs.length === 0) {
+        alert("No scenes are marked for image generation.");
+        return;
+    }
+
+    setImageJobs(jobs);
+    setCurrentJobIndex(0);
+    setAppStatus('generatingImages');
+
+  }, [scriptData, generationSettings.runsPerPrompt]);
+
 
   // Destructure for stable dependencies in useEffect
   const { aspectRatio } = formData;
@@ -122,7 +131,7 @@ function App() {
           index === currentJobIndex ? { ...job, status: 'completed', imageUrl } : job
         ));
         if (autoDownload && imageUrl) {
-            downloadImage(imageUrl, `image_${currentJobIndex + 1}.jpeg`);
+            downloadImage(imageUrl, `scene_${currentJob.sceneId}_run_${currentJob.id.split('-')[1]}.jpeg`);
         }
       } catch (e) {
         if (isCancelled) return;
@@ -134,7 +143,7 @@ function App() {
         ));
 
         if (errorMessage.toLowerCase().includes('quota exceeded')) {
-            setError('Image generation stopped: Your daily free quota has been exceeded. To continue generating images, please use the Gemini API.');
+            setError('Image generation stopped: Your daily free quota has been exceeded.');
             setAppStatus('error');
             shouldContinue = false;
         }
@@ -166,7 +175,7 @@ function App() {
 
   const handleSuggestScenes = useCallback(async () => {
     if (!formData.script.trim()) {
-      alert("Please provide a script first to suggest scenes.");
+      alert("Please provide content first.");
       return;
     }
     setIsSuggestingScenes(true);
@@ -188,11 +197,12 @@ function App() {
     return { words, chars, scenes };
   }, [formData.script]);
 
-  const downloadTxtFile = () => {
+  const downloadScriptJson = () => {
+    if(!scriptData) return;
     const element = document.createElement("a");
-    const file = new Blob([prompts.join("\n")], {type: 'text/plain'});
+    const file = new Blob([JSON.stringify(scriptData, null, 2)], {type: 'application/json'});
     element.href = URL.createObjectURL(file);
-    element.download = "generated_prompts.txt";
+    element.download = "production_plan.json";
     document.body.appendChild(element);
     element.click();
     document.body.removeChild(element);
@@ -213,7 +223,7 @@ function App() {
     function downloadNext() {
       if (i < successfulJobs.length) {
         const job = successfulJobs[i];
-        downloadImage(job.imageUrl!, `prompt_${prompts.indexOf(job.prompt) + 1}_run_${job.id.split('-')[1]}.jpeg`);
+        downloadImage(job.imageUrl!, `scene_${job.sceneId}_run_${job.id.split('-')[1]}.jpeg`);
         i++;
         setTimeout(downloadNext, 300); // Stagger downloads
       }
@@ -230,7 +240,7 @@ function App() {
             <ControlPanel
               formData={formData}
               onFormChange={handleFormChange}
-              onGenerate={handleGenerate}
+              onGenerate={handleGenerateScriptPlan}
               appStatus={appStatus}
               scriptStats={scriptStats}
               onSuggestScenes={handleSuggestScenes}
@@ -243,11 +253,11 @@ function App() {
             <OutputPanel
               appStatus={appStatus}
               error={error}
-              aiRequestPrompt={aiRequestPrompt}
-              prompts={prompts}
+              scriptData={scriptData}
               imageJobs={imageJobs}
-              onDownloadPrompts={downloadTxtFile}
+              onDownloadScript={downloadScriptJson}
               onDownloadAllImages={downloadAllImages}
+              onGenerateImages={handleGenerateImages}
               currentJobIndex={currentJobIndex}
               totalJobs={imageJobs.length}
             />

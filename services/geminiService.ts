@@ -1,58 +1,86 @@
-import { GoogleGenAI } from "@google/genai";
-import { FormData, AspectRatio } from '../types';
 
-export const buildPrompt = (formData: FormData): string => {
-  const { script, numScenes, niche, styleKeywords, aspectRatio, referenceImage } = formData;
-  
-  const baseInstruction = referenceImage
-    ? `You are an expert prompt generator for AI image models. Your task is to analyze the provided reference image for its artistic style and then create a series of detailed image prompts based on a script, applying that style.`
-    : `You are an expert prompt generator for AI image models. Your task is to create a series of detailed, vivid image prompts based on the provided script.`;
+import { GoogleGenAI, Type } from "@google/genai";
+import { FormData, AspectRatio, ScriptData } from '../types';
 
-  const styleRequirements = referenceImage
-    ? `- Analyze the style of the reference image I've provided. This includes color palette, lighting, composition, and overall mood.\n- Additional Style Keywords to combine with the image's style: ${styleKeywords || 'None'}`
-    : `- Base Style Keywords: ${styleKeywords || 'cinematic, photorealistic, 4k'}`;
-
-  return `
-${baseInstruction}
-
-**CONTEXT:**
-- Script:
----
-${script}
----
-- Niche/Topic: ${niche || 'Not specified'}
-- Number of Scenes to Generate: ${numScenes || 'Analyze the script to determine a logical number of scenes.'}
-
-**STYLE REQUIREMENTS:**
-${styleRequirements}
-- Aspect Ratio: --ar ${aspectRatio}
-
-**INSTRUCTIONS:**
-1. First, ${referenceImage ? "analyze the provided reference image to understand its distinct artistic style. " : ""}Read and understand the provided script.
-2. Divide the script into ${numScenes ? numScenes + ' scenes' : 'a series of logical scenes or paragraphs'}.
-3. For each scene, create a single, descriptive prompt for an AI image generator.
-4. The prompt should capture the key actions, characters, setting, and mood of the scene.
-5. Crucially, combine the style you identified ${referenceImage ? "from the reference image with the additional 'Style Keywords' and apply this unified style" : "from the 'Style Keywords' and apply this style consistently"} to every prompt you generate.
-6. Append the aspect ratio command \`--ar ${aspectRatio}\` to the end of each prompt.
-7. Format the output as a numbered list of prompts. Do not include any other commentary, preamble, or explanation. Just the prompts.
-  `;
+// Schema for the VEO ScriptMaster output
+const scriptDataSchema = {
+  type: Type.OBJECT,
+  properties: {
+    script: { type: Type.STRING, description: "The full generated script or summary." },
+    characters: { 
+      type: Type.OBJECT, 
+      description: "Key characters and their consistent visual descriptions.",
+      properties: {}, // Allow any keys (character names)
+    },
+    style: { type: Type.STRING, description: "The applied global visual style." },
+    scenes: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          id: { type: Type.INTEGER },
+          title: { type: Type.STRING },
+          description: { type: Type.STRING },
+          camera_angle: { type: Type.STRING },
+          lighting: { type: Type.STRING },
+          visual_prompt: { type: Type.STRING, description: "Detailed, cinematic image prompt." },
+          generate_image: { type: Type.BOOLEAN }
+        },
+        required: ["id", "title", "description", "camera_angle", "lighting", "visual_prompt", "generate_image"]
+      }
+    }
+  },
+  required: ["script", "scenes", "style"]
 };
 
-
-export const generatePromptsFromScript = async (formData: FormData): Promise<string> => {
+export const generatePromptsFromScript = async (formData: FormData): Promise<ScriptData> => {
   if (!process.env.API_KEY) {
     throw new Error("API_KEY environment variable not set.");
   }
   
   if (!formData.script.trim()) {
-    throw new Error("Script content cannot be empty.");
+    throw new Error("Content cannot be empty.");
   }
 
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-2.5-flash';
-  
-  const promptText = buildPrompt(formData);
-  const parts: any[] = [{ text: promptText }];
+
+  const { script, niche, visualStyle, styleKeywords, aspectRatio, numScenes, referenceImage } = formData;
+
+  const systemInstruction = `
+You are VEO ScriptMaster, an AI expert in creating long-form visual scripts and cinematic image prompts.
+
+**CORE RESPONSIBILITIES:**
+1. **Script Generation**: Analyze the input text. If it's a topic, write a script. If it's a script, analyze and structure it.
+2. **Scene Breakdown**: Break the content into distinct scenes. ${numScenes ? `Target approximately ${numScenes} scenes.` : "Auto-detect logical scenes."}
+3. **Visual Prompts**: Create detailed, VEO-ready image prompts for each scene.
+4. **Consistency**: Maintain strict character and style consistency across all prompts.
+
+**STYLE CONFIGURATION:**
+- Global Style: ${visualStyle}
+- Additional Keywords: ${styleKeywords || 'None'}
+- Aspect Ratio: ${aspectRatio}
+
+**RULES:**
+- Prompts must be long, detailed, and cinematic. Include camera angles and lighting.
+- Do not invent historical facts if the topic is historical.
+- Set "generate_image" to true for key visual scenes.
+- Return output strictly in the specified JSON format.
+  `;
+
+  const userPrompt = `
+INPUT CONTENT:
+---
+${script}
+---
+CONTEXT:
+- Niche: ${niche || 'General'}
+- Reference Image Provided: ${referenceImage ? "YES (See attached)" : "NO"}
+
+Generate the JSON plan.
+`;
+
+  const parts: any[] = [{ text: userPrompt }];
 
   if (formData.referenceImage) {
     const { base64, file } = formData.referenceImage;
@@ -68,11 +96,21 @@ export const generatePromptsFromScript = async (formData: FormData): Promise<str
     const response = await ai.models.generateContent({
       model,
       contents: { parts: parts },
+      config: {
+        systemInstruction: systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: scriptDataSchema,
+      }
     });
-    return response.text;
+
+    const text = response.text;
+    if (!text) throw new Error("No response text generated.");
+    
+    return JSON.parse(text) as ScriptData;
+
   } catch (error) {
     console.error("Error calling Gemini API:", error);
-    throw new Error("Failed to generate prompts. Please check the console for details.");
+    throw new Error("Failed to generate script plan. Please check the console for details.");
   }
 };
 
@@ -87,10 +125,13 @@ export const generateImageFromPrompt = async (prompt: string, aspectRatio: Aspec
 
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
+  // Append aspect ratio to prompt text for clarity, though the config handles the actual size
+  const fullPrompt = `${prompt} --ar ${aspectRatio}`;
+
   try {
     const response = await ai.models.generateImages({
         model: 'imagen-4.0-generate-001',
-        prompt: prompt,
+        prompt: fullPrompt,
         config: {
           numberOfImages: 1,
           outputMimeType: 'image/jpeg',
@@ -122,7 +163,7 @@ export const suggestSceneCount = async (script: string): Promise<string> => {
 
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-2.5-flash';
-  const prompt = `You are a script analysis tool. Read the following script and determine the number of distinct scenes. A scene is a continuous action in a single location. A new paragraph often indicates a new scene. Respond with ONLY the integer number of scenes and no other text or explanation.\n\nSCRIPT:\n---\n${script}\n---`;
+  const prompt = `Read the following script/content and determine an optimal number of distinct visual scenes for a video/slideshow. Respond with ONLY the integer number. Content: ${script.substring(0, 2000)}...`;
 
   try {
     const response = await ai.models.generateContent({
@@ -131,11 +172,17 @@ export const suggestSceneCount = async (script: string): Promise<string> => {
     });
     const count = parseInt(response.text.trim(), 10);
     if (isNaN(count)) {
-      throw new Error("AI did not return a valid number.");
+      return "10"; // Fallback
     }
     return String(count);
   } catch (error) {
-    console.error("Error calling Gemini API for scene suggestion:", error);
-    throw new Error("Failed to suggest scene count.");
+    console.error("Error suggesting scenes:", error);
+    return "";
   }
 };
+
+// Helper to build prompt just for UI display purposes if needed, 
+// though now the real prompt is hidden in the system instruction.
+export const buildPrompt = (formData: FormData): string => {
+    return `System: You are VEO ScriptMaster.\nTask: Generate JSON script plan.\nStyle: ${formData.visualStyle} ${formData.styleKeywords}\nInput: ${formData.script.substring(0, 100)}...`;
+}
