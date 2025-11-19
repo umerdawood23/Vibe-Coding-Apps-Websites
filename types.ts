@@ -1,7 +1,7 @@
 
 export type AspectRatio = '16:9' | '9:16' | '4:3' | '3:4' | '1:1';
 
-export type VisualStyle = 'cinematic' | 'realistic' | 'anime' | 'cgi' | 'medieval' | 'historical' | 'documentary' | 'cyberpunk';
+export type VisualStyle = 'cinematic' | 'realistic' | 'anime' | 'CGI' | 'medieval' | 'historical' | 'documentary';
 
 export interface ReferenceImage {
   file: File;
@@ -36,9 +36,14 @@ export interface Scene {
   generate_image: boolean;
 }
 
+export interface Character {
+  name: string;
+  description: string;
+}
+
 export interface ScriptData {
   script: string;
-  characters: Record<string, string>;
+  characters: Character[];
   style: string;
   scenes: Scene[];
 }
@@ -60,4 +65,5 @@ export interface GenerationSettings {
     autoDownload: boolean;
     runsPerPrompt: number;
     startFromPrompt: number;
+    generateImages: boolean;
 }

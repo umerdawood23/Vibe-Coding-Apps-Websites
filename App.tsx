@@ -8,12 +8,13 @@ import { FormData, AppStatus, ImageGenerationJob, GenerationSettings, ScriptData
 
 const defaultSettings: GenerationSettings = {
   waitTimeMode: 'fixed',
-  fixedWaitTime: 5,
-  randomWaitTimeMin: 5,
-  randomWaitTimeMax: 15,
+  fixedWaitTime: 2,
+  randomWaitTimeMin: 2,
+  randomWaitTimeMax: 5,
   autoDownload: false,
   runsPerPrompt: 1,
   startFromPrompt: 1,
+  generateImages: true, // Determines if the "green button" capability is available
 };
 
 function App() {
@@ -35,6 +36,30 @@ function App() {
   const [scriptData, setScriptData] = useState<ScriptData | null>(null);
   const [imageJobs, setImageJobs] = useState<ImageGenerationJob[]>([]);
   const [currentJobIndex, setCurrentJobIndex] = useState(0);
+  
+  // Daily Limit Counter State
+  const [dailyImageCount, setDailyImageCount] = useState<number>(0);
+
+  // Initialize Usage Tracker
+  useEffect(() => {
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const storageKey = `veo_usage_${today}`;
+    const storedCount = localStorage.getItem(storageKey);
+    if (storedCount) {
+        setDailyImageCount(parseInt(storedCount, 10));
+    } else {
+        // Clean up old keys if needed, or just set 0
+        setDailyImageCount(0);
+    }
+  }, []);
+
+  const incrementDailyCount = () => {
+    const today = new Date().toISOString().split('T')[0];
+    const storageKey = `veo_usage_${today}`;
+    const newCount = dailyImageCount + 1;
+    setDailyImageCount(newCount);
+    localStorage.setItem(storageKey, newCount.toString());
+  };
 
   const handleFormChange = useCallback((field: keyof FormData, value: any) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -54,45 +79,54 @@ function App() {
     try {
       const result = await generatePromptsFromScript(formData);
       setScriptData(result);
-      setAppStatus('idle'); // Go back to idle so user can review before generating images
+      
+      // Prepare the image jobs based on the setting, but DO NOT start them yet.
+      // Even if generation is disabled, we prepare the jobs structure so the list exists
+      // but the button will be conditional in output panel or settings.
+      // However, strictly based on the prompt: if toggled off, maybe we shouldn't even prepare them?
+      // The logic in OutputPanel checks "if (imageJobs.length > 0)".
+      
+      if (generationSettings.generateImages) {
+          const jobs: ImageGenerationJob[] = [];
+          const { scenes } = result;
+          const runs = Math.max(1, generationSettings.runsPerPrompt);
+
+          scenes.forEach(scene => {
+              // Even if the scene doesn't explicitly say "generate_image" (from AI), 
+              // if the user enabled global generation, we likely want to allow it.
+              // However, we'll respect the AI's "generate_image" flag if present to avoid non-visual scenes.
+              if (scene.generate_image) {
+                  for (let i = 0; i < runs; i++) {
+                      jobs.push({
+                          sceneId: scene.id,
+                          prompt: scene.visual_prompt,
+                          status: 'pending',
+                          id: `${scene.id}-${i}`
+                      });
+                  }
+              }
+          });
+          setImageJobs(jobs);
+      }
+
+      setAppStatus('idle'); // Ready for next step
     } catch (e) {
       const err = e as Error;
       setError(err.message || 'An unknown error occurred.');
       setAppStatus('error');
       console.error(e);
     }
-  }, [formData]);
+  }, [formData, generationSettings.generateImages, generationSettings.runsPerPrompt]);
 
   const handleGenerateImages = useCallback(() => {
     if (!scriptData) return;
-
-    const jobs: ImageGenerationJob[] = [];
-    const { scenes } = scriptData;
-    const runs = Math.max(1, generationSettings.runsPerPrompt);
-
-    scenes.forEach(scene => {
-        if (scene.generate_image) {
-            for (let i = 0; i < runs; i++) {
-                jobs.push({
-                    sceneId: scene.id,
-                    prompt: scene.visual_prompt,
-                    status: 'pending',
-                    id: `${scene.id}-${i}`
-                });
-            }
-        }
-    });
-
-    if (jobs.length === 0) {
-        alert("No scenes are marked for image generation.");
+    if (imageJobs.length === 0) {
+        alert("No scenes were identified for image generation. Ensure 'Image Generation' is enabled and try generating prompts again.");
         return;
     }
-
-    setImageJobs(jobs);
     setCurrentJobIndex(0);
     setAppStatus('generatingImages');
-
-  }, [scriptData, generationSettings.runsPerPrompt]);
+  }, [scriptData, imageJobs.length]);
 
 
   // Destructure for stable dependencies in useEffect
@@ -107,7 +141,7 @@ function App() {
 
   useEffect(() => {
     if (appStatus !== 'generatingImages' || currentJobIndex >= imageJobs.length) {
-      if (appStatus === 'generatingImages' && imageJobs.length > 0) {
+      if (appStatus === 'generatingImages' && imageJobs.length > 0 && currentJobIndex >= imageJobs.length) {
         setAppStatus('completed');
       }
       return;
@@ -115,6 +149,12 @@ function App() {
 
     let isCancelled = false;
     const currentJob = imageJobs[currentJobIndex];
+
+    // Skip if already processed (safety check)
+    if (currentJob.status !== 'pending') {
+        setCurrentJobIndex(prev => prev + 1);
+        return;
+    }
 
     const processJob = async () => {
       setImageJobs(prevJobs => prevJobs.map((job, index) =>
@@ -130,8 +170,12 @@ function App() {
         setImageJobs(prevJobs => prevJobs.map((job, index) =>
           index === currentJobIndex ? { ...job, status: 'completed', imageUrl } : job
         ));
+        
+        // Update usage count
+        incrementDailyCount();
+
         if (autoDownload && imageUrl) {
-            downloadImage(imageUrl, `scene_${currentJob.sceneId}_run_${currentJob.id.split('-')[1]}.jpeg`);
+            downloadImage(imageUrl, `scene_${currentJob.sceneId}.jpg`);
         }
       } catch (e) {
         if (isCancelled) return;
@@ -202,7 +246,7 @@ function App() {
     const element = document.createElement("a");
     const file = new Blob([JSON.stringify(scriptData, null, 2)], {type: 'application/json'});
     element.href = URL.createObjectURL(file);
-    element.download = "production_plan.json";
+    element.download = "veo_script_master_plan.json";
     document.body.appendChild(element);
     element.click();
     document.body.removeChild(element);
@@ -223,7 +267,7 @@ function App() {
     function downloadNext() {
       if (i < successfulJobs.length) {
         const job = successfulJobs[i];
-        downloadImage(job.imageUrl!, `scene_${job.sceneId}_run_${job.id.split('-')[1]}.jpeg`);
+        downloadImage(job.imageUrl!, `scene_${job.sceneId}.jpg`);
         i++;
         setTimeout(downloadNext, 300); // Stagger downloads
       }
@@ -232,11 +276,12 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 font-sans p-4 sm:p-6 lg:p-8">
-      <div className="max-w-7xl mx-auto">
+    <div className="min-h-screen bg-[#090b10] font-sans p-4 sm:p-6 text-gray-300">
+      <div className="max-w-[1600px] mx-auto">
         <Header />
-        <main className="mt-8 grid grid-cols-1 lg:grid-cols-5 gap-8">
-          <div className="lg:col-span-2">
+        <main className="mt-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+          {/* Control Panel - 4 Columns */}
+          <div className="lg:col-span-4 xl:col-span-3">
             <ControlPanel
               formData={formData}
               onFormChange={handleFormChange}
@@ -247,9 +292,11 @@ function App() {
               isSuggestingScenes={isSuggestingScenes}
               settings={generationSettings}
               onSettingsChange={handleSettingsChange}
+              dailyImageCount={dailyImageCount}
             />
           </div>
-          <div className="lg:col-span-3">
+          {/* Output Panel - 8 Columns */}
+          <div className="lg:col-span-8 xl:col-span-9">
             <OutputPanel
               appStatus={appStatus}
               error={error}
