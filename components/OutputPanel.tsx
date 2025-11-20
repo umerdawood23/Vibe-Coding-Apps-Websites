@@ -90,8 +90,10 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
 
     const handleDownloadPrompts = () => {
         if (!scriptData) return;
-        // Clean format for text file - NO SEPARATOR LINES
-        const text = scriptData.scenes.map(s => `[Scene ${s.id}]\n${s.visual_prompt}`).join('\n\n');
+        // Clean format for text file - Just the prompts, separated by paragraphs.
+        // Removed [Scene X] headers to prevent parsing issues in other tools.
+        const text = scriptData.scenes.map(s => s.visual_prompt).join('\n\n');
+        
         const element = document.createElement("a");
         const file = new Blob([text], {type: 'text/plain'});
         element.href = URL.createObjectURL(file);
